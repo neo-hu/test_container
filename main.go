@@ -82,6 +82,7 @@ func main() {
 		}
 		spec := oci.DefaultLinuxSpec()
 		spec.Process.Env = imageConfig.Config.Env
+		spec.Process.Env = append(spec.Process.Env, "TERM=xterm-256color")
 		spec.Process.Args = imageConfig.Config.Cmd
 		spec.Process.Cwd = imageConfig.Config.WorkingDir
 		spec.Root.Path = root
