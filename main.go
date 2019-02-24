@@ -42,25 +42,6 @@ func NewSockPair(name string) (parent *os.File, child *os.File, err error) {
 	return os.NewFile(uintptr(fds[1]), name+"-p"), os.NewFile(uintptr(fds[0]), name+"-c"), nil
 }
 
-func cmdTemp(cfg *config.InitCofing, childPipe *os.File) *exec.Cmd {
-	cmd := exec.Command("/proc/self/exe", "init")
-	cmd.Stdin = os.Stdin
-	cmd.Stderr = os.Stderr
-	cmd.Stdout = os.Stdout
-	cmd.Dir = cfg.Rootfs
-	if cmd.SysProcAttr == nil {
-		cmd.SysProcAttr = &syscall.SysProcAttr{}
-	}
-	cmd.Env = append(cmd.Env, fmt.Sprintf("GOMAXPROCS=%s", os.Getenv("GOMAXPROCS")))
-
-	cmd.ExtraFiles = append(cmd.ExtraFiles, childPipe)
-	// todo _LIBCONTAINER_INITPIPE=childPipe 环境变量用于进程间通信 to init.go:53
-	cmd.Env = append(cmd.Env,
-		fmt.Sprintf("_LIBCONTAINER_INITPIPE=%d", 3+len(cmd.ExtraFiles)-1),
-	)
-	return cmd
-}
-
 const (
 	driverName = "overlay2"
 	RootDir    = "/tmp/docker"
@@ -85,7 +66,7 @@ func main() {
 		clean()
 		args := context.Args()
 		image := args[0]
-
+		// todo step 1 下载镜像
 		imageConfig, layer, err := image2.PullImage(path.Join(RootDir, driverName), image)
 		if err != nil {
 			return err
@@ -93,6 +74,8 @@ func main() {
 		// todo 生成容器id
 		containerId := fmt.Sprintf("container-%s", GenerateID(23))
 		logrus.Infof("container id %s", containerId)
+
+		// todo step 2 使用下载镜像构建容器的根目录
 		root, err := initMount(containerId, layer)
 		if err != nil {
 			return err
@@ -137,12 +120,6 @@ func main() {
 			})
 		}
 		spec.Linux.Seccomp = seccomp.DefaultProfile(&spec)
-
-		//bundle := "/var/run/docker/containerd/daemon/io.containerd.runtime.v1.linux/moby/05b7a3e1d3d259e030bd06f3bf31ddc17da22f5b152c9fad666b779fd169ecea/config.json"
-		//spec, err := config.LoadSpec(bundle)
-		//if err != nil {
-		//	return err
-		//}
 		parentPipe, childPipe, err := NewSockPair("init")
 		if err != nil {
 			return errors.Wrap(err, "creating new init pipe")
@@ -152,7 +129,7 @@ func main() {
 		if err != nil {
 			return err
 		}
-		//
+		// todo step 3 fock一个 init.go 进程并且设定namespaces
 		cmd := cmdTemp(initConfig, childPipe)
 		return start(cmd, bootstrapData(&spec), parentPipe, childPipe, initConfig)
 	}
@@ -289,6 +266,25 @@ func initMount(containerId string, layer *image2.Layer) (string, error) {
 		return "", errors.Wrapf(err, "mount opts:%s", opts)
 	}
 	return mergedDir, nil
+}
+
+func cmdTemp(cfg *config.InitCofing, childPipe *os.File) *exec.Cmd {
+	cmd := exec.Command("/proc/self/exe", "init")
+	cmd.Stdin = os.Stdin
+	cmd.Stderr = os.Stderr
+	cmd.Stdout = os.Stdout
+	cmd.Dir = cfg.Rootfs
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.Env = append(cmd.Env, fmt.Sprintf("GOMAXPROCS=%s", os.Getenv("GOMAXPROCS")))
+
+	cmd.ExtraFiles = append(cmd.ExtraFiles, childPipe)
+	// todo _LIBCONTAINER_INITPIPE=childPipe 环境变量用于进程间通信 to init.go:53
+	cmd.Env = append(cmd.Env,
+		fmt.Sprintf("_LIBCONTAINER_INITPIPE=%d", 3+len(cmd.ExtraFiles)-1),
+	)
+	return cmd
 }
 
 type pid struct {

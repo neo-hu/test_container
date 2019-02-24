@@ -57,6 +57,7 @@ func StartInitialization() error {
 	if err != nil {
 		return err
 	}
+	// todo 设定文件系统根目录
 	err = libcontainer.PrepareRootfs(initConfig)
 	if err != nil {
 		return err

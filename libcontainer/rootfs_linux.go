@@ -32,14 +32,10 @@ func PrepareRootfs(initConfig *config.InitCofing) error {
 		}
 	}
 
-	for _, m := range initConfig.Mounts {
-		if m.Device == "bind" && config.CleanPath(m.Destination) == "/dev" {
-			panic("22")
-		}
-	}
 	if err := unix.Chdir(initConfig.Rootfs); err != nil {
 		return errors.Wrapf(err, "changing dir to %q", initConfig.Rootfs)
 	}
+	// 设定根目录
 	if initConfig.Spec.Linux.Namespaces.Contains(config.MountNamespace) {
 		err = pivotRoot(initConfig.Rootfs)
 	} else {
