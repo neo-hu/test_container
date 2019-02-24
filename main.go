@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	gocontext "context"
 	"encoding/json"
 	"fmt"
 	"github.com/neo-hu/test_container/config"
@@ -18,6 +19,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path"
 	"strings"
 	"syscall"
@@ -64,10 +66,15 @@ func main() {
 	logrus.SetLevel(logrus.DebugLevel)
 	app.Action = func(context *cli.Context) error {
 		clean()
+		ctx, cancel := gocontext.WithCancel(gocontext.Background())
+		Trap(func(s string) {
+			fmt.Println(s)
+			cancel()
+		})
 		args := context.Args()
 		image := args[0]
 		// todo step 1 下载镜像
-		imageConfig, layer, err := image2.PullImage(path.Join(RootDir, driverName), image)
+		imageConfig, layer, err := image2.PullImage(ctx, path.Join(RootDir, driverName), image)
 		if err != nil {
 			return err
 		}
@@ -132,7 +139,8 @@ func main() {
 		}
 		// todo step 3 fock一个 init.go 进程并且设定namespaces
 		cmd := cmdTemp(initConfig, childPipe)
-		return start(cmd, bootstrapData(&spec), parentPipe, childPipe, initConfig)
+
+		return start(cmd, bootstrapData(&spec), parentPipe, childPipe, initConfig, ctx)
 	}
 	app.Commands = []cli.Command{
 		initCommand,
@@ -140,6 +148,25 @@ func main() {
 	if err := app.Run(os.Args); err != nil {
 		log.Fatalln(err)
 	}
+}
+
+func Trap(cleanup func(string)) {
+	c := make(chan os.Signal, 1)
+	signals := []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGPIPE}
+	signal.Notify(c, signals...)
+	go func() {
+		for sig := range c {
+			if sig == syscall.SIGPIPE {
+				continue
+			}
+			go func(sig os.Signal) {
+				switch sig {
+				case os.Interrupt, syscall.SIGTERM:
+					cleanup(fmt.Sprintf("with signal '%v'", sig))
+				}
+			}(sig)
+		}
+	}()
 }
 
 func buildHostsFile(containerId string) (string, error) {
@@ -293,7 +320,7 @@ type pid struct {
 	PidFirstChild int `json:"pid_first"`
 }
 
-func start(cmd *exec.Cmd, bootstrapData io.Reader, parentPipe *os.File, childPipe *os.File, initConfig *config.InitCofing) error {
+func start(cmd *exec.Cmd, bootstrapData io.Reader, parentPipe *os.File, childPipe *os.File, initConfig *config.InitCofing, ctx gocontext.Context) error {
 	defer parentPipe.Close()
 	// todo 启动init进程
 	err := cmd.Start()
@@ -326,16 +353,31 @@ func start(cmd *exec.Cmd, bootstrapData io.Reader, parentPipe *os.File, childPip
 		return err
 	}
 	_, _ = firstChildProcess.Wait()
-	_, err = os.FindProcess(pid.Pid)
+	p, err := os.FindProcess(pid.Pid)
 	if err != nil {
 		return err
 	}
+	fmt.Println(pid.Pid, "pid.Pid")
 	// todo 发送容器配置数据
 	err = sendConfig(parentPipe, initConfig)
 	if err != nil {
 		return err
 	}
-	return nil
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := p.Wait()
+		done <- err
+	}()
+
+	select {
+	case <-ctx.Done():
+		syscall.Kill(-pid.Pid, syscall.SIGKILL)
+		err := <-done
+		return err
+	case err := <-done:
+		return err
+	}
 }
 
 func sendConfig(parentPipe *os.File, initConfig *config.InitCofing) error {

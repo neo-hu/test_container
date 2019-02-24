@@ -88,7 +88,7 @@ func UnmarshalManifest(ctHeader string, b []byte) (Manifest, Descriptor, error) 
 	return Manifest{}, Descriptor{}, fmt.Errorf("unsupported manifest media type and no default available: %s", mediaType)
 }
 
-func PullImage(rootDir, image string) (*Image, *Layer, error) {
+func PullImage(ctx context.Context, rootDir, image string) (*Image, *Layer, error) {
 	domain, remainder := splitDockerDomain(image)
 	base, err := url.Parse("https://" + domain)
 	if err != nil {
